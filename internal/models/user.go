@@ -11,6 +11,7 @@ type User struct {
 	Email        string    `gorm:"uniqueIndex;not null"`
 	PasswordHash string    `gorm:"not null"`
 	AvatarURL    string
+	Rooms        []Room
 	LastSeenAt   time.Time
 	CreatedAt    time.Time
 }

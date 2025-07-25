@@ -1,34 +1,60 @@
 package handlers
 
 import (
+	"github.com/google/uuid"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"net/http"
+	"github.com/thereayou/discord-lite/internal/middleware"
+	ws "github.com/thereayou/discord-lite/internal/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-		// TODO: check origin
-	},
+// WebSocketHandler управляет WebSocket соединениями
+type WebSocketHandler struct {
+	hub            *ws.Hub
+	messageHandler *MessageHandler
+	upgrader       websocket.Upgrader
 }
 
-func WebSocketHandler(c *gin.Context) {
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+// NewWebSocketHandler создает новый WebSocket handler
+func NewWebSocketHandler(hub *ws.Hub, messageHandler *MessageHandler) *WebSocketHandler {
+	return &WebSocketHandler{
+		hub:            hub,
+		messageHandler: messageHandler,
+		upgrader: websocket.Upgrader{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			CheckOrigin: func(r *http.Request) bool {
+				// TODO: Проверить origin в production
+				return true
+			},
+		},
+	}
+}
+
+// HandleWebSocket обрабатывает WebSocket соединения
+func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
+	// Получаем userID из контекста (установлен middleware)
+	userID, exists := c.Get(middleware.UserIDKey)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	// Upgrade соединение
+	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
 	}
-	defer conn.Close()
 
-	// Простой echo сервер для начала
-	for {
-		messageType, p, err := conn.ReadMessage()
-		if err != nil {
-			break
-		}
+	// Создаем клиента
+	client := ws.NewClient(h.hub, conn, userID.(uuid.UUID))
 
-		if err := conn.WriteMessage(messageType, p); err != nil {
-			break
-		}
-	}
+	// Регистрируем клиента
+	h.hub.Register(client)
+
+	// Запускаем goroutines для чтения и записи
+	go client.WritePump()
+	go client.ReadPump(h.messageHandler)
 }
