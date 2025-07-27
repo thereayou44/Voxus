@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"github.com/thereayou/discord-lite/internal/handlers/dto"
 	"log"
 	"time"
 
@@ -23,35 +24,6 @@ func NewMessageHandler(db *database.Database, hub *websocket.Hub) *MessageHandle
 	}
 }
 
-// MessagePayload структура для входящих сообщений
-type MessagePayload struct {
-	Content string `json:"content"`
-	Type    string `json:"type,omitempty"` // text, image, file
-}
-
-// MessageResponse структура для исходящих сообщений
-type MessageResponse struct {
-	ID        uuid.UUID  `json:"id"`
-	RoomID    uuid.UUID  `json:"room_id"`
-	UserID    uuid.UUID  `json:"user_id"`
-	Content   string     `json:"content"`
-	Type      string     `json:"type"`
-	CreatedAt time.Time  `json:"created_at"`
-	EditedAt  *time.Time `json:"edited_at,omitempty"`
-	User      UserInfo   `json:"user"`
-}
-
-type UserInfo struct {
-	ID        uuid.UUID `json:"id"`
-	Username  string    `json:"username"`
-	AvatarURL string    `json:"avatar_url,omitempty"`
-}
-
-// TypingPayload для уведомлений о наборе текста
-type TypingPayload struct {
-	IsTyping bool `json:"is_typing"`
-}
-
 func (h *MessageHandler) HandleMessage(client *websocket.Client, msg *websocket.Message) error {
 	switch msg.Type {
 	case websocket.TypeMessage:
@@ -62,9 +34,6 @@ func (h *MessageHandler) HandleMessage(client *websocket.Client, msg *websocket.
 
 	case websocket.TypeMessageDelete:
 		return h.handleMessageDelete(client, msg)
-
-	case websocket.TypeTyping:
-		return h.handleTyping(client, msg)
 
 	default:
 		log.Printf("Unknown message type: %s", msg.Type)
@@ -81,7 +50,7 @@ func (h *MessageHandler) handleTextMessage(client *websocket.Client, msg *websoc
 		return websocket.ErrUserNotInRoom
 	}
 
-	var payload MessagePayload
+	var payload dto.MessagePayload
 	if err := json.Unmarshal(msg.Data, &payload); err != nil {
 		return err
 	}
@@ -114,14 +83,14 @@ func (h *MessageHandler) handleTextMessage(client *websocket.Client, msg *websoc
 		return err
 	}
 
-	response := MessageResponse{
+	response := dto.MessageResponse{
 		ID:        message.ID,
 		RoomID:    message.RoomID,
 		UserID:    message.UserID,
 		Content:   message.Content,
 		Type:      message.Type,
 		CreatedAt: message.CreatedAt,
-		User: UserInfo{
+		User: dto.UserInfo{
 			ID:        user.ID,
 			Username:  user.Username,
 			AvatarURL: user.AvatarURL,
@@ -248,59 +217,17 @@ func (h *MessageHandler) handleMessageDelete(client *websocket.Client, msg *webs
 	return nil
 }
 
-func (h *MessageHandler) handleTyping(client *websocket.Client, msg *websocket.Message) error {
-	if msg.RoomID == nil {
-		return websocket.ErrInvalidMessage
-	}
-
-	if !client.IsInRoom(*msg.RoomID) {
-		return websocket.ErrUserNotInRoom
-	}
-
-	var payload TypingPayload
-	if err := json.Unmarshal(msg.Data, &payload); err != nil {
-		return err
-	}
-
-	user, err := h.db.GetUser(client.UserID.String())
-	if err != nil {
-		return err
-	}
-
-	response := map[string]interface{}{
-		"user_id":   client.UserID,
-		"username":  user.Username,
-		"is_typing": payload.IsTyping,
-	}
-
-	wsMsg := websocket.Message{
-		Type:      websocket.TypeTyping,
-		RoomID:    msg.RoomID,
-		UserID:    client.UserID,
-		Timestamp: time.Now(),
-	}
-
-	responseData, _ := json.Marshal(response)
-	wsMsg.Data = responseData
-
-	// Отправляем всем кроме отправителя
-	msgData, _ := json.Marshal(wsMsg)
-	h.hub.SendToRoom(*msg.RoomID, msgData)
-
-	return nil
-}
-
-func (h *MessageHandler) LoadRoomHistory(roomID uuid.UUID, limit int, beforeID *uuid.UUID) ([]MessageResponse, error) {
+func (h *MessageHandler) LoadRoomHistory(roomID uuid.UUID, limit int, beforeID *uuid.UUID) ([]dto.MessageResponse, error) {
 	messages, err := h.db.GetRoomMessages(roomID.String(), limit, beforeID)
 	if err != nil {
 		return nil, err
 	}
 
-	responses := make([]MessageResponse, len(messages))
+	responses := make([]dto.MessageResponse, len(messages))
 	for i, msg := range messages {
 		user, _ := h.db.GetUser(msg.UserID.String())
 
-		responses[i] = MessageResponse{
+		responses[i] = dto.MessageResponse{
 			ID:        msg.ID,
 			RoomID:    msg.RoomID,
 			UserID:    msg.UserID,
@@ -308,7 +235,7 @@ func (h *MessageHandler) LoadRoomHistory(roomID uuid.UUID, limit int, beforeID *
 			Type:      msg.Type,
 			CreatedAt: msg.CreatedAt,
 			EditedAt:  msg.EditedAt,
-			User: UserInfo{
+			User: dto.UserInfo{
 				ID:        user.ID,
 				Username:  user.Username,
 				AvatarURL: user.AvatarURL,

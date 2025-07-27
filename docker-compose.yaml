@@ -2,17 +2,23 @@ version: '3.8'
 
 networks:
   app_net:
+    driver: bridge
 
 services:
   postgres:
     image: postgres:15-alpine
     restart: always
     env_file:
-      - .env           # в файле .env: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yourpass}
+      POSTGRES_DB: ${POSTGRES_DB:-discord_lite}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./internal/database/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: [ "CMD", "pg_isready", "-U", "${POSTGRES_USER}" ]
       interval: 10s
@@ -26,6 +32,8 @@ services:
     restart: always
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -36,3 +44,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:

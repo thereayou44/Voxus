@@ -26,7 +26,7 @@ func NewWebSocketHandler(hub *ws.Hub, messageHandler *MessageHandler) *WebSocket
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
 			CheckOrigin: func(r *http.Request) bool {
-				// TODO: Проверить origin в production
+				// TODO: Проверить origin в prod
 				return true
 			},
 		},
@@ -35,26 +35,22 @@ func NewWebSocketHandler(hub *ws.Hub, messageHandler *MessageHandler) *WebSocket
 
 // HandleWebSocket обрабатывает WebSocket соединения
 func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
-	// Получаем userID из контекста (установлен middleware)
+	// Получаем userID из контекста
 	userID, exists := c.Get(middleware.UserIDKey)
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
-	// Upgrade соединение
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
 	}
 
-	// Создаем клиента
 	client := ws.NewClient(h.hub, conn, userID.(uuid.UUID))
 
-	// Регистрируем клиента
 	h.hub.Register(client)
 
-	// Запускаем goroutines для чтения и записи
 	go client.WritePump()
 	go client.ReadPump(h.messageHandler)
 }

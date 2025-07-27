@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"github.com/thereayou/discord-lite/internal/models"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -10,7 +11,7 @@ import (
 func (d *Database) Connect() error {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "host=localhost user=postgres password=yourpass dbname=discord_lite port=5432 sslmode=disable"
+		return errors.New("DATABASE_URL is not set")
 	}
 
 	var err error

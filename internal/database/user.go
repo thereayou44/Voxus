@@ -32,6 +32,14 @@ func (d *Database) FindUserByEmail(email string) (*models.User, error) {
 	return &user, nil
 }
 
+func (d *Database) SearchUsersByUsername(query string) ([]models.User, error) {
+	var users []models.User
+	err := d.db.Where("username ILIKE ?", "%"+query+"%").
+		Limit(20).
+		Find(&users).Error
+	return users, err
+}
+
 func (d *Database) UpdateLastSeen(id string) error {
 	return d.db.Model(&models.User{}).Where("id = ?", id).Update("last_seen_at", time.Now()).Error
 }

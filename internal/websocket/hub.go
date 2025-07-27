@@ -25,7 +25,6 @@ const (
 	TypeMessage       MessageType = "message"
 	TypeMessageEdit   MessageType = "message_edit"
 	TypeMessageDelete MessageType = "message_delete"
-	TypeTyping        MessageType = "typing"
 
 	// Типы комнат
 	TypeRoomJoin  MessageType = "room_join"
@@ -65,7 +64,7 @@ type Hub struct {
 	// Клиенты в комнатах
 	rooms map[uuid.UUID]map[uuid.UUID]*Client
 
-	// Каналы для регистрации/отмены регистрации в комнатах
+	// Каналы для регистрации/отмены регистрации
 	register   chan *Client
 	unregister chan *Client
 
@@ -82,7 +81,7 @@ type BroadcastMessage struct {
 	RoomID  *uuid.UUID
 	UserID  *uuid.UUID // nil = всем в комнате
 	Message []byte
-	Exclude *uuid.UUID // исключить этого клиента
+	Exclude *uuid.UUID
 }
 
 // NewHub создает новый Hub
@@ -138,6 +137,16 @@ func (h *Hub) Stop() {
 	}
 }
 
+// Register регистрирует нового клиента
+func (h *Hub) Register(client *Client) {
+	h.register <- client
+}
+
+// Unregister отменяет регистрацию клиента
+func (h *Hub) Unregister(client *Client) {
+	h.unregister <- client
+}
+
 func (h *Hub) registerClient(client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -151,6 +160,7 @@ func (h *Hub) registerClient(client *Client) {
 
 	log.Printf("Client registered: %s (User: %s)", client.ID, client.UserID)
 
+	// Отправляем уведомление о подключении пользователя
 	h.notifyUserStatus(client.UserID, TypeUserOnline)
 }
 
@@ -159,14 +169,17 @@ func (h *Hub) unregisterClient(client *Client) {
 	defer h.mu.Unlock()
 
 	if _, ok := h.clients[client.ID]; ok {
+		// Удаляем из всех комнат
 		for roomID := range client.Rooms {
 			h.removeFromRoomUnsafe(client, roomID)
 		}
 
+		// Удаляем из списка клиентов пользователя
 		if userClients, ok := h.userClients[client.UserID]; ok {
 			delete(userClients, client.ID)
 			if len(userClients) == 0 {
 				delete(h.userClients, client.UserID)
+				// Отправляем уведомление об отключении пользователя
 				h.notifyUserStatus(client.UserID, TypeUserOffline)
 			}
 		}
@@ -178,6 +191,7 @@ func (h *Hub) unregisterClient(client *Client) {
 	}
 }
 
+// JoinRoom добавляет клиента в комнату
 func (h *Hub) JoinRoom(client *Client, roomID uuid.UUID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -191,6 +205,7 @@ func (h *Hub) JoinRoom(client *Client, roomID uuid.UUID) {
 	client.Rooms[roomID] = true
 	client.mu.Unlock()
 
+	// Уведомляем других участников о присоединении
 	joinMsg := Message{
 		Type:      TypeRoomJoin,
 		RoomID:    &roomID,
@@ -202,6 +217,7 @@ func (h *Hub) JoinRoom(client *Client, roomID uuid.UUID) {
 		h.broadcastToRoomExcept(roomID, data, client.ID)
 	}
 
+	// Отправляем список участников новому клиенту
 	h.sendRoomUsers(client, roomID)
 }
 
@@ -240,6 +256,7 @@ func (h *Hub) removeFromRoomUnsafe(client *Client, roomID uuid.UUID) {
 	}
 }
 
+// SendToUser отправляет сообщение пользователю
 func (h *Hub) SendToUser(userID uuid.UUID, message []byte) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -249,13 +266,13 @@ func (h *Hub) SendToUser(userID uuid.UUID, message []byte) {
 			select {
 			case client.Send <- message:
 			default:
-				// Канал заполнен, клиент не успевает читать
 				log.Printf("Client %s send channel full", client.ID)
 			}
 		}
 	}
 }
 
+// SendToRoom отправляет сообщение в комнату
 func (h *Hub) SendToRoom(roomID uuid.UUID, message []byte) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -265,10 +282,8 @@ func (h *Hub) SendToRoom(roomID uuid.UUID, message []byte) {
 
 func (h *Hub) broadcastMessage(bm *BroadcastMessage) {
 	if bm.RoomID != nil {
-		// Отправка в комнату
 		h.SendToRoom(*bm.RoomID, bm.Message)
 	} else if bm.UserID != nil {
-		// Отправка пользователю
 		h.SendToUser(*bm.UserID, bm.Message)
 	}
 }
@@ -320,7 +335,7 @@ func (h *Hub) sendRoomUsers(client *Client, roomID uuid.UUID) {
 	}
 }
 
-// notifyUserStatus уведомляет пользователей о статусе другого пользователя
+// notifyUserStatus уведомляет о статусе пользователя
 func (h *Hub) notifyUserStatus(userID uuid.UUID, status MessageType) {
 	msg := Message{
 		Type:      status,
@@ -329,7 +344,7 @@ func (h *Hub) notifyUserStatus(userID uuid.UUID, status MessageType) {
 	}
 
 	if data, err := json.Marshal(msg); err == nil {
-		// TODO: нужно отправлять только друзьям или контактам, а пока отправляем всем подключенным пользователям
+		// TODO: отправлять только друзьям или контактам
 		for _, client := range h.clients {
 			select {
 			case client.Send <- data:
@@ -353,12 +368,12 @@ func (h *Hub) ping() {
 			select {
 			case client.Send <- data:
 			default:
-				// Клиент не отвечает, возможно стоит отключить
 			}
 		}
 	}
 }
 
+// GetOnlineUsers возвращает список онлайн пользователей
 func (h *Hub) GetOnlineUsers() []uuid.UUID {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -370,6 +385,7 @@ func (h *Hub) GetOnlineUsers() []uuid.UUID {
 	return users
 }
 
+// GetRoomUsers возвращает список пользователей в комнате
 func (h *Hub) GetRoomUsers(roomID uuid.UUID) []uuid.UUID {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
