@@ -131,3 +131,12 @@ func (d *Database) DeleteRoom(id string) error {
 		return tx.Delete(&room).Error
 	})
 }
+
+func (d *Database) UserHasAccessToRoom(userID, roomID string) (bool, error) {
+	var count int64
+	err := d.db.Table("room_members").
+		Where("user_id = ? AND room_id = ?", userID, roomID).
+		Count(&count).Error
+
+	return count > 0, err
+}

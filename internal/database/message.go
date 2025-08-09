@@ -69,3 +69,11 @@ func (d *Database) GetUnreadMessages(userID string, roomID string, lastReadAt ti
 
 	return messages, err
 }
+
+//func (d *Database) UpdateLastReadAt(userID, roomID string) error {
+//	return d.db.Exec(`
+//		UPDATE room_members
+//		SET last_read_at = ?
+//		WHERE user_id = ? AND room_id = ?`,
+//		time.Now(), userID, roomID).Error
+//}

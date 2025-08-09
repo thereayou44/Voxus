@@ -21,11 +21,11 @@ type Server struct {
 	JWTManager *auth.JWTManager
 	Hub        *websocket.Hub
 	// Handlers
-	AuthH        *handlers.AuthHandler
-	UserH        *handlers.UserHandler
-	RoomH        *handlers.RoomHandler
-	HTTPMessageH *handlers.HTTPMessageHandler
-	WSHandler    *handlers.WebSocketHandler
+	AuthH     *handlers.AuthHandler
+	UserH     *handlers.UserHandler
+	RoomH     *handlers.RoomHandler
+	MessageH  *handlers.HTTPMessageHandler
+	WSHandler *handlers.WebSocketHandler
 }
 
 func NewServer() *Server {
@@ -80,30 +80,27 @@ func NewServer() *Server {
 	userH := handlers.NewUserHandler(dbConn)
 	roomH := handlers.NewRoomHandler(dbConn, hub)
 
-	// Message handler нужен для WebSocket handler
 	msgHandler := handlers.NewMessageHandler(dbConn, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub, msgHandler)
 
 	// HTTP message handler для REST API
 	messageH := handlers.NewHTTPMessageHandler(dbConn)
 
-	// Setup router
 	router := gin.Default()
 
-	// Set trusted proxies
 	router.SetTrustedProxies(nil)
 
 	server := &Server{
-		Router:       router,
-		DB:           dbConn,
-		Redis:        rdb,
-		JWTManager:   jwtMgr,
-		Hub:          hub,
-		AuthH:        authH,
-		UserH:        userH,
-		RoomH:        roomH,
-		HTTPMessageH: messageH,
-		WSHandler:    wsHandler,
+		Router:     router,
+		DB:         dbConn,
+		Redis:      rdb,
+		JWTManager: jwtMgr,
+		Hub:        hub,
+		AuthH:      authH,
+		UserH:      userH,
+		RoomH:      roomH,
+		MessageH:   messageH,
+		WSHandler:  wsHandler,
 	}
 
 	// Setup routes

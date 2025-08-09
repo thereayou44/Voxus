@@ -46,6 +46,14 @@ func (h *MessageHandler) handleTextMessage(client *websocket.Client, msg *websoc
 		return websocket.ErrInvalidMessage
 	}
 
+	hasAccess, err := h.db.UserHasAccessToRoom(client.UserID.String(), msg.RoomID.String())
+	if err != nil {
+		return err
+	}
+	if !hasAccess {
+		return websocket.ErrUserNotInRoom
+	}
+
 	if !client.IsInRoom(*msg.RoomID) {
 		return websocket.ErrUserNotInRoom
 	}
