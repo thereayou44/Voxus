@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -353,6 +355,276 @@ func (h *RoomHandler) GetRoomMembers(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"members": members})
+}
+
+func (h *RoomHandler) AddMember(c *gin.Context) {
+	userID := c.MustGet(middleware.UserIDKey).(uuid.UUID)
+	roomID := c.Param("id")
+
+	var req struct {
+		UserID string `json:"user_id" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Проверяем, что добавляемый пользователь существует
+	targetUser, err := h.db.GetUser(req.UserID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+
+	// Получаем информацию о комнате
+	room, err := h.db.GetRoom(roomID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "room not found"})
+		return
+	}
+
+	// Проверяем права (только создатель может добавлять участников напрямую)
+	// В будущем здесь можно добавить проверку ролей (админ, модератор)
+	if room.CreatedBy != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only room owner can add members directly"})
+		return
+	}
+
+	// Проверяем тип комнаты
+	if room.Type == "direct" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot add members to direct room"})
+		return
+	}
+
+	// Проверяем, не является ли пользователь уже участником
+	for _, member := range room.Members {
+		if member.ID.String() == req.UserID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "user is already a member"})
+			return
+		}
+	}
+
+	// Проверяем лимит участников
+	if len(room.Members) >= room.MaxMembers {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "room is full"})
+		return
+	}
+
+	// Добавляем участника
+	if err := h.db.AddUserToRoom(req.UserID, roomID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add member"})
+		return
+	}
+
+	// Отправляем уведомление через WebSocket
+	notification := gin.H{
+		"type":     "member_added",
+		"room_id":  roomID,
+		"user_id":  req.UserID,
+		"added_by": userID,
+	}
+
+	if data, err := json.Marshal(notification); err == nil {
+		h.hub.SendToRoom(room.ID, data)
+		// Также отправляем уведомление добавленному пользователю
+		h.hub.SendToUser(targetUser.ID, data)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "member added successfully",
+		"user": gin.H{
+			"id":         targetUser.ID,
+			"username":   targetUser.Username,
+			"avatar_url": targetUser.AvatarURL,
+		},
+	})
+}
+
+// RemoveMember удаляет участника из комнаты (кик)
+func (h *RoomHandler) RemoveMember(c *gin.Context) {
+	userID := c.MustGet(middleware.UserIDKey).(uuid.UUID)
+	roomID := c.Param("id")
+	memberID := c.Param("memberId")
+
+	// Получаем информацию о комнате
+	room, err := h.db.GetRoom(roomID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "room not found"})
+		return
+	}
+
+	// Проверяем права (только создатель может удалять участников)
+	if room.CreatedBy != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only room owner can remove members"})
+		return
+	}
+
+	// Проверяем тип комнаты
+	if room.Type == "direct" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot remove members from direct room"})
+		return
+	}
+
+	// Нельзя удалить создателя комнаты
+	if memberID == room.CreatedBy.String() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot remove room owner"})
+		return
+	}
+
+	// Нельзя удалить самого себя через этот эндпоинт (используйте LeaveRoom)
+	if memberID == userID.String() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "use leave endpoint to leave room"})
+		return
+	}
+
+	// Проверяем, что пользователь является участником
+	isMember := false
+	for _, member := range room.Members {
+		if member.ID.String() == memberID {
+			isMember = true
+			break
+		}
+	}
+
+	if !isMember {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user is not a member of this room"})
+		return
+	}
+
+	// Удаляем участника
+	if err := h.db.RemoveUserFromRoom(memberID, roomID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove member"})
+		return
+	}
+
+	// Отправляем уведомление через WebSocket
+	memberUUID, _ := uuid.Parse(memberID)
+	notification := gin.H{
+		"type":       "member_removed",
+		"room_id":    roomID,
+		"user_id":    memberID,
+		"removed_by": userID,
+	}
+
+	if data, err := json.Marshal(notification); err == nil {
+		h.hub.SendToRoom(room.ID, data)
+		// Также отправляем уведомление удаленному пользователю
+		h.hub.SendToUser(memberUUID, data)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "member removed successfully"})
+}
+
+// AddMembers добавляет несколько участников в комнату (массовое добавление)
+func (h *RoomHandler) AddMembers(c *gin.Context) {
+	userID := c.MustGet(middleware.UserIDKey).(uuid.UUID)
+	roomID := c.Param("id")
+
+	var req struct {
+		UserIDs []string `json:"user_ids" binding:"required,min=1"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Получаем информацию о комнате
+	room, err := h.db.GetRoom(roomID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "room not found"})
+		return
+	}
+
+	// Проверяем права
+	if room.CreatedBy != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only room owner can add members"})
+		return
+	}
+
+	// Проверяем тип комнаты
+	if room.Type == "direct" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot add members to direct room"})
+		return
+	}
+
+	// Проверяем лимит участников
+	newTotalMembers := len(room.Members) + len(req.UserIDs)
+	if newTotalMembers > room.MaxMembers {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("adding %d members would exceed room limit of %d",
+				len(req.UserIDs), room.MaxMembers),
+		})
+		return
+	}
+
+	// Создаем мапу существующих участников для быстрой проверки
+	existingMembers := make(map[string]bool)
+	for _, member := range room.Members {
+		existingMembers[member.ID.String()] = true
+	}
+
+	// Результаты добавления
+	added := []string{}
+	skipped := []string{}
+	failed := []string{}
+
+	// Добавляем каждого пользователя
+	for _, userIDStr := range req.UserIDs {
+		// Проверяем, что пользователь существует
+		if _, err := h.db.GetUser(userIDStr); err != nil {
+			failed = append(failed, userIDStr)
+			continue
+		}
+
+		// Проверяем, не является ли уже участником
+		if existingMembers[userIDStr] {
+			skipped = append(skipped, userIDStr)
+			continue
+		}
+
+		// Добавляем участника
+		if err := h.db.AddUserToRoom(userIDStr, roomID); err != nil {
+			failed = append(failed, userIDStr)
+		} else {
+			added = append(added, userIDStr)
+		}
+	}
+
+	// Отправляем уведомления через WebSocket для успешно добавленных
+	if len(added) > 0 {
+		notification := gin.H{
+			"type":     "members_added",
+			"room_id":  roomID,
+			"user_ids": added,
+			"added_by": userID,
+		}
+
+		if data, err := json.Marshal(notification); err == nil {
+			h.hub.SendToRoom(room.ID, data)
+
+			// Отправляем уведомления добавленным пользователям
+			for _, addedID := range added {
+				if uid, err := uuid.Parse(addedID); err == nil {
+					h.hub.SendToUser(uid, data)
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "batch add completed",
+		"added":   added,
+		"skipped": skipped,
+		"failed":  failed,
+		"summary": gin.H{
+			"total_requested": len(req.UserIDs),
+			"added_count":     len(added),
+			"skipped_count":   len(skipped),
+			"failed_count":    len(failed),
+		},
+	})
 }
 
 // formatRoomResponse форматирует ответ для комнаты

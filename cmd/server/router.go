@@ -46,6 +46,9 @@ func APIEndpoints(r *gin.Engine, s *Server) {
 		api.POST("/rooms/:id/join", s.RoomH.JoinRoom)
 		api.POST("/rooms/:id/leave", s.RoomH.LeaveRoom)
 		api.GET("/rooms/:id/members", s.RoomH.GetRoomMembers)
+		api.POST("/rooms/:id/members", s.RoomH.AddMember)
+		api.POST("/rooms/:id/members/batch", s.RoomH.AddMembers)
+		api.DELETE("/rooms/:id/members/:memberId", s.RoomH.RemoveMember)
 
 		// Direct room
 		api.POST("/rooms/direct", s.RoomH.CreateDirectRoom)
@@ -55,6 +58,15 @@ func APIEndpoints(r *gin.Engine, s *Server) {
 		api.POST("/rooms/:id/messages", s.MessageH.SendMessage)
 		api.PUT("/messages/:id", s.MessageH.UpdateMessage)
 		api.DELETE("/messages/:id", s.MessageH.DeleteMessage)
+
+		// Invite endpoints
+		api.POST("/rooms/:id/invites", s.InviteH.CreateInvite)  // Создать инвайт для комнаты
+		api.GET("/rooms/:id/invites", s.InviteH.GetRoomInvites) // Получить инвайты комнаты
+		api.GET("/invites", s.InviteH.GetMyInvites)             // Мои созданные инвайты
+		api.POST("/invites/:code/use", s.InviteH.UseInvite)     // Использовать инвайт
+		api.DELETE("/invites/:id", s.InviteH.RevokeInvite)      // Отозвать инвайт
+		api.GET("/invites/:id/stats", s.InviteH.GetInviteStats) // Статистика инвайта
+
 	}
 
 	// WebSocket endpoint с аутентификацией

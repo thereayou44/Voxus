@@ -245,6 +245,132 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Таблица для инвайтов/приглашений
+CREATE TABLE IF NOT EXISTS room_invites (
+                                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                                            room_id UUID NOT NULL,
+                                            code VARCHAR(32) UNIQUE NOT NULL,
+                                            created_by UUID NOT NULL,
+                                            expires_at TIMESTAMP,
+                                            max_uses INT DEFAULT NULL, -- NULL = unlimited
+                                            uses INT DEFAULT 0,
+                                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                                            CONSTRAINT fk_invite_room FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
+                                            CONSTRAINT fk_invite_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Индексы для быстрого поиска
+CREATE INDEX idx_invites_code ON room_invites(code);
+CREATE INDEX idx_invites_room_id ON room_invites(room_id);
+CREATE INDEX idx_invites_expires_at ON room_invites(expires_at);
+
+-- Таблица для отслеживания использования инвайтов
+CREATE TABLE IF NOT EXISTS invite_uses (
+                                           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                                           invite_id UUID NOT NULL,
+                                           user_id UUID NOT NULL,
+                                           used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                                           CONSTRAINT fk_invite_use_invite FOREIGN KEY (invite_id) REFERENCES room_invites(id) ON DELETE CASCADE,
+                                           CONSTRAINT fk_invite_use_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                                           UNIQUE(invite_id, user_id) -- Один пользователь не может использовать инвайт дважды
+);
+
+-- Функция для проверки валидности инвайта
+CREATE OR REPLACE FUNCTION is_invite_valid(invite_code VARCHAR)
+    RETURNS BOOLEAN AS $$
+DECLARE
+    invite RECORD;
+BEGIN
+    SELECT * INTO invite
+    FROM room_invites
+    WHERE code = invite_code;
+
+    IF NOT FOUND THEN
+        RETURN FALSE;
+    END IF;
+
+    -- Проверяем срок действия
+    IF invite.expires_at IS NOT NULL AND invite.expires_at < CURRENT_TIMESTAMP THEN
+        RETURN FALSE;
+    END IF;
+
+    -- Проверяем количество использований
+    IF invite.max_uses IS NOT NULL AND invite.uses >= invite.max_uses THEN
+        RETURN FALSE;
+    END IF;
+
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Функция для использования инвайта
+CREATE OR REPLACE FUNCTION use_invite(invite_code VARCHAR, user_id UUID)
+    RETURNS UUID AS $$
+DECLARE
+    invite RECORD;
+    room_id UUID;
+BEGIN
+    -- Получаем инвайт с блокировкой
+    SELECT * INTO invite
+    FROM room_invites
+    WHERE code = invite_code
+        FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Invalid invite code';
+    END IF;
+
+    -- Проверяем валидность
+    IF NOT is_invite_valid(invite_code) THEN
+        RAISE EXCEPTION 'Invite is expired or reached max uses';
+    END IF;
+
+    -- Проверяем, не является ли пользователь уже участником
+    IF EXISTS (
+        SELECT 1 FROM room_members
+        WHERE room_members.room_id = invite.room_id
+          AND room_members.user_id = use_invite.user_id
+    ) THEN
+        RAISE EXCEPTION 'User is already a member of this room';
+    END IF;
+
+    -- Добавляем пользователя в комнату
+    INSERT INTO room_members (user_id, room_id)
+    VALUES (use_invite.user_id, invite.room_id);
+
+    -- Увеличиваем счетчик использований
+    UPDATE room_invites
+    SET uses = uses + 1
+    WHERE id = invite.id;
+
+    -- Записываем использование
+    INSERT INTO invite_uses (invite_id, user_id)
+    VALUES (invite.id, use_invite.user_id);
+
+    RETURN invite.room_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Триггер для автоматической очистки истекших инвайтов
+CREATE OR REPLACE FUNCTION cleanup_expired_invites()
+    RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM room_invites
+    WHERE expires_at IS NOT NULL
+      AND expires_at < CURRENT_TIMESTAMP - INTERVAL '7 days';
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Запускаем очистку при каждом создании нового инвайта
+CREATE TRIGGER trigger_cleanup_invites
+    AFTER INSERT ON room_invites
+    FOR EACH STATEMENT
+EXECUTE FUNCTION cleanup_expired_invites();
+
 -- Гранты для пользователя приложения
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres;

@@ -25,6 +25,7 @@ type Server struct {
 	UserH     *handlers.UserHandler
 	RoomH     *handlers.RoomHandler
 	MessageH  *handlers.HTTPMessageHandler
+	InviteH   *handlers.InviteHandler
 	WSHandler *handlers.WebSocketHandler
 }
 
@@ -83,6 +84,8 @@ func NewServer() *Server {
 	msgHandler := handlers.NewMessageHandler(dbConn, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub, msgHandler)
 
+	inviteH := handlers.NewInviteHandler(dbConn, hub)
+
 	// HTTP message handler для REST API
 	messageH := handlers.NewHTTPMessageHandler(dbConn)
 
@@ -101,6 +104,7 @@ func NewServer() *Server {
 		RoomH:      roomH,
 		MessageH:   messageH,
 		WSHandler:  wsHandler,
+		InviteH:    inviteH,
 	}
 
 	// Setup routes
